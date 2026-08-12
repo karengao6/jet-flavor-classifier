@@ -1,7 +1,7 @@
 [project]
 name = "jet-flavor-classifier"
 version = "0.1.0"
-description = "Add your description here"
+description = "Machine learning for jet flavor classification using the ATLAS Open Data jet-flavor dataset"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -21,3 +21,7 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.2",
 ]
+
+[build-system]
+requires = ["uv_build>=0.9.0,<0.10.0"]
+build-backend = "uv_build"

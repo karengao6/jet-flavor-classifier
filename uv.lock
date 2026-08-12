@@ -342,7 +342,7 @@ wheels = [
 [[package]]
 name = "jet-flavor-classifier"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "cernopendata-client" },
     { name = "h5py" },
