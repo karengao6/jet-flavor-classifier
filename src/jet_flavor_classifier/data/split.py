@@ -16,7 +16,7 @@ def split_by_event(
     *,
     test_size: float = 0.15,
     validation_size: float = 0.15,
-    random_state: int = 42,
+    seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Split jet indices by event number.
@@ -63,7 +63,7 @@ def split_by_event(
     train_events, temp_events = train_test_split(
         unique_events,
         test_size=test_size + validation_size,
-        random_state=random_state,
+        random_state=seed,
     )
 
     relative_validation_size = (
@@ -73,7 +73,7 @@ def split_by_event(
     validation_events, test_events = train_test_split(
         temp_events,
         test_size=relative_validation_size,
-        random_state=random_state,
+        random_state=seed,
     )
 
     train_mask = np.isin(

@@ -1,38 +1,37 @@
+# src/jet_flavor_classifier/data/hdf5.py
+
 from __future__ import annotations
 
 import h5py
+import numpy as np
 
 
 class HDF5Reader:
     """
-    Lazily reads jet data from an HDF5 file.
+    Lazy reader for the CERN jet-flavor HDF5 dataset.
 
-    IMPORTANT:
-    Do not load the entire dataset into memory.
+    Important properties of the actual file:
 
-    Instead, read only the jet requested by __getitem__().
+        jets:
+            shape = [5,619,475]
+
+        tracks:
+            shape = [5,619,475, 40]
+
+    Therefore:
+        jets[i] and tracks[i] refer to the same jet.
+
+    We never load the entire dataset into memory.
     """
 
-    def __init__(
-        self,
-        path: str,
-        tracks_key: str = "tracks",
-        labels_key: str = "labels",
-    ) -> None:
+    def __init__(self, path: str) -> None:
         self.path = path
-        self.tracks_key = tracks_key
-        self.labels_key = labels_key
 
-        # The file is opened lazily.
-        #
-        # This is especially useful when PyTorch creates
-        # multiple DataLoader worker processes.
+        # The file is opened only when data is first requested.
         self._file: h5py.File | None = None
 
     def _get_file(self) -> h5py.File:
-        """
-        Open the HDF5 file only when it is actually needed.
-        """
+        """Open the HDF5 file lazily."""
 
         if self._file is None:
             self._file = h5py.File(self.path, "r")
@@ -40,31 +39,61 @@ class HDF5Reader:
         return self._file
 
     def __len__(self) -> int:
+        """Return the number of jets."""
+
+        file = self._get_file()
+
+        return len(file["jets"])
+
+    def get_event_numbers(self) -> np.ndarray:
         """
-        Return the number of jets without loading them into memory.
+        Return the event number for every jet.
+
+        Used for event-level train/validation/test splitting.
         """
 
         file = self._get_file()
 
-        return len(file[self.labels_key])
+        return np.asarray(
+            file["jets"]["eventNumber"]
+        )
 
-    def get_tracks(self, index: int):
+    def get_tracks(self, index: int) -> np.ndarray:
         """
-        Read ONLY one jet's tracks from disk.
+        Return all 40 track slots for one jet.
+
+        Shape:
+            [40]
+
+        Each element is a structured track record containing
+        fields such as pt, eta-related quantities, d0, etc.,
+        plus the `valid` field.
+
+        The Dataset will use `valid` to remove invalid slots.
         """
 
         file = self._get_file()
 
-        return file[self.tracks_key][index]
+        return np.asarray(
+            file["tracks"][index]
+        )
 
-    def get_label(self, index: int):
+    def get_label(self, index: int) -> int:
         """
-        Read ONLY one jet's label from disk.
+        Return the raw jet flavor label.
+
+        Currently using HadronGhostTruthLabelID.
+
+        IMPORTANT:
+        Do not use truth-label information as model input.
+        This field is the TARGET, not an input feature.
         """
 
         file = self._get_file()
 
-        return file[self.labels_key][index]
+        return int(
+            file["jets"]["HadronGhostTruthLabelID"][index]
+        )
 
     def close(self) -> None:
         if self._file is not None:

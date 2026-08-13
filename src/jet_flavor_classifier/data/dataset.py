@@ -1,10 +1,13 @@
+# src/jet_flavor_classifier/data/dataset.py
+
 from __future__ import annotations
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .hdf5 import HDF5Reader
+from .features import TRACK_FEATURES
+from .hdf5_reader import HDF5Reader
 from .normalize import StandardNormalizer
 from .types import Jet
 
@@ -13,17 +16,14 @@ class JetDataset(Dataset):
     """
     PyTorch Dataset for jet flavor classification.
 
-    Responsibilities:
-        - represent the dataset as an indexable collection
-        - lazily retrieve one jet
-        - optionally normalize its features
-        - return a Jet object
+    The Dataset:
+        - lazily reads jets from HDF5
+        - filters invalid tracks
+        - extracts selected features
+        - optionally normalizes features
+        - returns Jet objects
 
-    It does NOT:
-        - create batches
-        - shuffle data
-        - split train/validation/test data
-        - run the model
+    `indices` identifies which jets belong to this Dataset.
     """
 
     def __init__(
@@ -33,87 +33,51 @@ class JetDataset(Dataset):
         normalizer: StandardNormalizer | None = None,
     ) -> None:
 
-        self.path = path
-
-        # If indices are supplied, this Dataset represents
-        # only those specific jets.
-        #
-        # This is how train/validation/test subsets are created.
-        self.indices = indices
-
-        # Normalizer is fitted using training data and then
-        # reused by validation/test datasets.
-        self.normalizer = normalizer
-
-        # HDF5Reader performs lazy disk access.
         self.reader = HDF5Reader(path)
 
-    def __len__(self) -> int:
-        """
-        Number of samples visible through this Dataset.
-        """
-
-        if self.indices is not None:
-            return len(self.indices)
-
-        return len(self.reader)
-
-    def __getitem__(self, index: int) -> Jet:
-        """
-        Retrieve one jet.
-
-        Flow:
-            Dataset index
-                ↓
-            actual HDF5 index
-                ↓
-            read tracks + label
-                ↓
-            normalize
-                ↓
-            convert to PyTorch tensors
-                ↓
-            return Jet
-        """
-
-        # Convert Dataset-local index into the actual HDF5 index.
-        actual_index = (
-            self.indices[index]
-            if self.indices is not None
-            else index
-        )
-
-        # Read only this jet from disk.
-        tracks = self.reader.get_tracks(actual_index)
-        label = self.reader.get_label(actual_index)
-
-        # Convert HDF5/NumPy data to float32.
-        tracks = np.asarray(
-            tracks,
-            dtype=np.float32,
-        )
-
-        # Normalize track features if a normalizer was provided.
-        if self.normalizer is not None:
-            original_shape = tracks.shape
-
-            # Treat every track as one row:
-            #
-            # [num_tracks, num_features]
-            #
-            # This makes normalization operate feature-by-feature.
-            tracks = tracks.reshape(
-                -1,
-                tracks.shape[-1],
+        # If no indices are supplied, expose the whole HDF5 dataset.
+        #
+        # Training code SHOULD supply explicit split indices.
+        if indices is None:
+            self.indices = np.arange(len(self.reader))
+        else:
+            self.indices = np.asarray(
+                indices,
+                dtype=np.int64,
             )
 
-            tracks = self.normalizer.transform(tracks)
+        self.normalizer = normalizer
 
-            # Restore [num_tracks, num_features].
-            tracks = tracks.reshape(original_shape)
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, index: int) -> Jet:
+        jet_index = self.indices[index]
+
+        tracks = self.reader.get_tracks(jet_index)
+
+        # HDF5 `valid` identifies real track slots.
+        valid = tracks["valid"]
+
+        # Remove invalid/padded track slots.
+        tracks = tracks[valid]
+
+        # Extract only model input features.
+        features = np.column_stack(
+            [
+                tracks[name]
+                for name in TRACK_FEATURES
+            ]
+        ).astype(np.float32)
+
+        # Apply training-set statistics if supplied.
+        if self.normalizer is not None:
+            features = self.normalizer.transform(features)
+
+        label = self.reader.get_label(jet_index)
 
         return Jet(
-            tracks=torch.from_numpy(tracks),
+            tracks=torch.from_numpy(features),
             label=torch.tensor(
                 label,
                 dtype=torch.long,

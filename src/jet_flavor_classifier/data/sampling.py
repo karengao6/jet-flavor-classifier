@@ -5,42 +5,45 @@ import numpy as np
 
 def select_indices(
     n_samples: int,
-    max_samples: int | None,
-    seed: int,
+    max_samples: int | None = None,
+    seed: int = 42,
 ) -> np.ndarray:
     """
-    Select which samples will participate in an experiment.
+    Select dataset indices reproducibly.
 
-    If max_samples is None:
-        use the entire dataset.
+    Args:
+        n_samples:
+            Total number of available samples.
 
-    Otherwise:
-        randomly select max_samples samples.
+        max_samples:
+            Maximum number of samples to select.
+            If None, select all samples.
 
-    The seed makes the selection reproducible.
+        seed:
+            Random seed used for reproducible sampling.
+
+    Returns:
+        1D NumPy array containing selected indices.
     """
 
-    indices = np.arange(n_samples)
+    if n_samples < 0:
+        raise ValueError("n_samples must be non-negative.")
 
-    if max_samples is None:
-        return indices
-
-    if max_samples <= 0:
+    if max_samples is not None and max_samples <= 0:
         raise ValueError(
             "max_samples must be positive."
         )
 
-    if max_samples > n_samples:
-        raise ValueError(
-            f"max_samples={max_samples} exceeds "
-            f"dataset size={n_samples}"
-        )
+    # Use every sample if no limit was specified.
+    if max_samples is None or max_samples >= n_samples:
+        return np.arange(n_samples)
 
-    # Use a local RNG rather than modifying global NumPy state.
+    # Local RNG keeps this operation reproducible
+    # without modifying NumPy's global random state.
     rng = np.random.default_rng(seed)
 
     return rng.choice(
-        indices,
+        n_samples,
         size=max_samples,
         replace=False,
     )
