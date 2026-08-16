@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import h5py
 import numpy as np
@@ -50,7 +49,7 @@ def test_run_baseline_saves_metrics(tmp_path):
         max_samples=80,
     )
 
-    assert set(summary) == {"logistic_regression", "tree_model"}
+    assert set(summary) == {"logistic_regression", "xgboost"}
 
     for model_name in summary:
         metrics_path = output_dir / f"{model_name}_metrics.json"

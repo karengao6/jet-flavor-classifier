@@ -7,19 +7,19 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
+    f1_score,
     precision_recall_fscore_support,
     precision_score,
     recall_score,
-    f1_score,
     roc_auc_score,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
 
 from jet_flavor_classifier.data.features import JET_FEATURE_NAMES, extract_jet_features
 from jet_flavor_classifier.data.labels import CLASS_NAMES, encode_labels
@@ -28,6 +28,7 @@ from jet_flavor_classifier.data.split import split_by_event
 
 
 def _build_models(seed: int) -> dict[str, object]:
+    """Create the feature-level baseline estimators."""
     return {
         "logistic_regression": Pipeline(
             steps=[
@@ -42,11 +43,17 @@ def _build_models(seed: int) -> dict[str, object]:
                 ),
             ]
         ),
-        "tree_model": HistGradientBoostingClassifier(
+        "xgboost": XGBClassifier(
+            objective="multi:softprob",
+            num_class=len(CLASS_NAMES),
             max_depth=8,
             learning_rate=0.08,
-            max_iter=300,
+            n_estimators=300,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="mlogloss",
             random_state=seed,
+            n_jobs=-1,
         ),
     }
 
@@ -87,6 +94,62 @@ def _save_metrics(model_name: str, output_dir: Path, metrics: dict[str, object])
     df.to_csv(confusion_matrix_path)
 
 
+def _evaluate_model(
+    model_name: str,
+    model: object,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    class_names: list[str],
+) -> dict[str, object]:
+    """Fit one classifier and calculate its test-set metrics."""
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)
+
+    accuracy = accuracy_score(y_test, y_pred)
+    precision_macro = precision_score(y_test, y_pred, average="macro", zero_division=0)
+    recall_macro = recall_score(y_test, y_pred, average="macro", zero_division=0)
+    f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    precision_weighted = precision_score(y_test, y_pred, average="weighted", zero_division=0)
+    recall_weighted = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+    f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+
+    per_class = _compute_class_metrics(y_test, y_pred, class_names)
+    cm = confusion_matrix(y_test, y_pred, labels=np.arange(len(class_names)))
+
+    try:
+        roc_auc = roc_auc_score(y_test, y_proba, multi_class="ovr", average="macro")
+    except ValueError:
+        roc_auc = float("nan")
+
+    return {
+        "model": model_name,
+        "feature_names": list(JET_FEATURE_NAMES),
+        "class_names": class_names,
+        "accuracy": float(accuracy),
+        "precision": {
+            "macro": float(precision_macro),
+            "weighted": float(precision_weighted),
+            "per_class": {name: values["precision"] for name, values in per_class.items()},
+        },
+        "recall": {
+            "macro": float(recall_macro),
+            "weighted": float(recall_weighted),
+            "per_class": {name: values["recall"] for name, values in per_class.items()},
+        },
+        "f1": {
+            "macro": float(f1_macro),
+            "weighted": float(f1_weighted),
+            "per_class": {name: values["f1"] for name, values in per_class.items()},
+        },
+        "roc_auc": float(roc_auc),
+        "confusion_matrix": cm.tolist(),
+        "class_specific": per_class,
+    }
+
+
 def run_baseline(
     data_path: str,
     output_dir: str | Path,
@@ -94,7 +157,7 @@ def run_baseline(
     seed: int = 42,
     max_samples: int | None = None,
 ) -> dict[str, dict[str, object]]:
-    """Train and evaluate logistic regression and tree baselines on jet-level features."""
+    """Train and evaluate logistic regression and XGBoost jet-feature baselines."""
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -122,55 +185,9 @@ def run_baseline(
     model_outputs: dict[str, dict[str, object]] = {}
 
     for model_name, model in _build_models(seed).items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        y_proba = model.predict_proba(X_test)
-
-        accuracy = accuracy_score(y_test, y_pred)
-        precision_macro = precision_score(y_test, y_pred, average="macro", zero_division=0)
-        recall_macro = recall_score(y_test, y_pred, average="macro", zero_division=0)
-        f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
-        precision_weighted = precision_score(y_test, y_pred, average="weighted", zero_division=0)
-        recall_weighted = recall_score(y_test, y_pred, average="weighted", zero_division=0)
-        f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-
-        per_class = _compute_class_metrics(y_test, y_pred, class_names)
-        cm = confusion_matrix(y_test, y_pred, labels=np.arange(len(class_names)))
-
-        try:
-            roc_auc = roc_auc_score(
-                y_test,
-                y_proba,
-                multi_class="ovr",
-                average="macro",
-            )
-        except ValueError:
-            roc_auc = float("nan")
-
-        metrics = {
-            "model": model_name,
-            "feature_names": list(JET_FEATURE_NAMES),
-            "class_names": class_names,
-            "accuracy": float(accuracy),
-            "precision": {
-                "macro": float(precision_macro),
-                "weighted": float(precision_weighted),
-                "per_class": {name: metrics["precision"] for name, metrics in per_class.items()},
-            },
-            "recall": {
-                "macro": float(recall_macro),
-                "weighted": float(recall_weighted),
-                "per_class": {name: metrics["recall"] for name, metrics in per_class.items()},
-            },
-            "f1": {
-                "macro": float(f1_macro),
-                "weighted": float(f1_weighted),
-                "per_class": {name: metrics["f1"] for name, metrics in per_class.items()},
-            },
-            "roc_auc": float(roc_auc),
-            "confusion_matrix": cm.tolist(),
-            "class_specific": per_class,
-        }
+        metrics = _evaluate_model(
+            model_name, model, X_train, y_train, X_test, y_test, class_names
+        )
 
         _save_metrics(model_name, output_path, metrics)
         model_outputs[model_name] = metrics
