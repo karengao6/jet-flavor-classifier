@@ -47,3 +47,23 @@ def select_indices(
         size=max_samples,
         replace=False,
     )
+
+
+def limit_indices(
+    indices: np.ndarray,
+    max_samples: int | None = None,
+    seed: int = 42,
+) -> np.ndarray:
+    """Subset a set of indices deterministically."""
+
+    indices = np.asarray(indices, dtype=np.int64)
+
+    if max_samples is None or max_samples >= len(indices):
+        return indices
+
+    if max_samples <= 0:
+        raise ValueError("max_samples must be positive.")
+
+    rng = np.random.default_rng(seed)
+    subset = rng.choice(len(indices), size=max_samples, replace=False)
+    return indices[subset]
